@@ -21,6 +21,10 @@ func init() {
 
 			// 设置时区，日志记录里会使用到
 			"timezone": config.Env("TIMEZONE", "Asia/Shanghai"),
+
+			// 修改限流格式为每小时请求数
+			"api_rate_limit": config.Env("API_RATE_LIMIT", "100"),  // 每小时100次
+			"queue_rate_limit": config.Env("QUEUE_RATE_LIMIT", "30000"), // 每小时30000次
 		}
 	})
 }

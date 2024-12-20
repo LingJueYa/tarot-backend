@@ -20,10 +20,10 @@ const (
 
 // LatencyStats 延迟统计
 type LatencyStats struct {
-	count    atomic.Int64
-	totalMs  atomic.Int64
-	maxMs    atomic.Int64
-	recentMs []int64 // 最近的延迟样本
+	count    int64
+	total    time.Duration
+	min      time.Duration
+	max      time.Duration
 }
 
 // QueueMetrics 增强版性能指标收集器
@@ -35,8 +35,9 @@ type QueueMetrics struct {
 	errorRates      *sync.Map // 错误率统计
 
 	// 延迟统计
-	pushLatency LatencyStats
-	popLatency  LatencyStats
+	pushLatency   *LatencyStats
+	popLatency    *LatencyStats
+	processLatency *LatencyStats
 
 	// 队列状态
 	queueLength     atomic.Int64
@@ -53,6 +54,8 @@ func NewQueueMetrics() *QueueMetrics {
 		processingTimes: &sync.Map{},
 		errorRates:      &sync.Map{},
 		waitTimeStart:   &sync.Map{},
+		pushLatency:    &LatencyStats{},
+		processLatency: &LatencyStats{},
 	}
 }
 
@@ -101,33 +104,40 @@ func (m *QueueMetrics) RecordProcessingTime(duration time.Duration) {
 
 // RecordPushLatency 记录推送延迟
 func (m *QueueMetrics) RecordPushLatency(d time.Duration) {
-	ms := d.Milliseconds()
-	m.pushLatency.record(ms)
+	if m.pushLatency == nil {
+		m.pushLatency = &LatencyStats{}
+	}
+	m.pushLatency.record(d)
 }
 
 // RecordPopLatency 记录获取延迟
 func (m *QueueMetrics) RecordPopLatency(d time.Duration) {
-	ms := d.Milliseconds()
-	m.popLatency.record(ms)
+	m.popLatency.record(d)
+}
+
+// RecordProcessLatency 记录处理延迟
+func (m *QueueMetrics) RecordProcessLatency(d time.Duration) {
+	m.processLatency.record(d)
 }
 
 // record 记录延迟数据
-func (s *LatencyStats) record(ms int64) {
-	s.count.Add(1)
-	s.totalMs.Add(ms)
-
-	// 更新最大延迟
-	for {
-		current := s.maxMs.Load()
-		if ms <= current {
-			break
-		}
-		if s.maxMs.CompareAndSwap(current, ms) {
-			break
-		}
+func (s *LatencyStats) record(d time.Duration) {
+	atomic.AddInt64(&s.count, 1)
+	
+	// 防止除零错误
+	if s.count == 0 {
+		return
 	}
-
-	// 记录最近的样本
-	idx := s.count.Load() % int64(len(s.recentMs))
-	s.recentMs[idx] = ms
+	
+	s.total += d
+	
+	// 更新最小值
+	if s.min == 0 || d < s.min {
+		s.min = d
+	}
+	
+	// 更新最大值
+	if d > s.max {
+		s.max = d
+	}
 }

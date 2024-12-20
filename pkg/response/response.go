@@ -47,6 +47,20 @@ func JSON(c *gin.Context, data interface{}) {
 	c.JSON(http.StatusOK, data)
 }
 
+// Created 成功创建的响应
+func Created(c *gin.Context, data interface{}, msg ...string) {
+	message := "创建成功"
+	if len(msg) > 0 {
+		message = msg[0]
+	}
+	
+	c.JSON(http.StatusCreated, gin.H{
+		"status":  "success",
+		"message": message,
+		"data":    data,
+	})
+}
+
 //  ------------------ 错误响应系列 ------------------
 
 // Abort400 响应 400 错误

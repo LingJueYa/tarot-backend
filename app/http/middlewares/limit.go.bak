@@ -1,6 +1,9 @@
 package middlewares
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"tarot/pkg/app"
 	"tarot/pkg/limiter"
@@ -9,8 +12,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cast"
 	"golang.org/x/time/rate"
+	redisClient "tarot/pkg/redis"
 )
 
 const (
@@ -34,6 +39,27 @@ type RateLimitConfig struct {
 	Timeout time.Duration
 }
 
+// LimiterConfig 限流器配置
+type LimiterConfig struct {
+	Rate  int           // 速率
+	Burst int           // 突发限制
+	TTL   time.Duration // 过期时间
+}
+
+// 限流器实现
+type Limiter struct {
+	config LimiterConfig
+	redis  *redisClient.RedisClient
+}
+
+// NewLimiter 创建新的限流器
+func NewLimiter(config LimiterConfig, redis *redisClient.RedisClient) *Limiter {
+	return &Limiter{
+		config: config,
+		redis:  redis,
+	}
+}
+
 // LimitIP 全局限流中间件，针对 IP 进行限流
 //
 // 支持的限流格式:
@@ -48,7 +74,7 @@ type RateLimitConfig struct {
 // - 高并发安全
 // - 优雅降级
 func LimitIP(limit string) gin.HandlerFunc {
-	// 测试环境使用较大限制
+	// 测试环境用较大限制
 	if app.IsTesting() {
 		limit = "1000000-H"
 	}
@@ -87,7 +113,7 @@ func LimitPerRoute(limit string) gin.HandlerFunc {
 }
 
 // createLimiterHandler 创建限流处理器
-// keyFunc: 用于生成限流键的函数
+// keyFunc: 用于生成限流���的函数
 // config: 限流配置
 func createLimiterHandler(keyFunc func(*gin.Context) string, config RateLimitConfig) gin.HandlerFunc {
 	// 定期清理过期的限流器
@@ -151,7 +177,7 @@ func setRateLimitHeaders(c *gin.Context, lim *rate.Limiter) {
 	c.Header("X-RateLimit-Reset", cast.ToString(time.Now().Add(time.Second).Unix()))
 }
 
-// cleanupLimiters 定期清理过期的限流器
+// cleanupLimiters 定期���理过期的限流器
 func cleanupLimiters() {
 	ticker := time.NewTicker(1 * time.Hour)
 	for range ticker.C {
@@ -171,4 +197,114 @@ func cleanupLimiters() {
 			return true
 		})
 	}
+}
+
+// checkRateLimit 检查是否超出限制
+func checkRateLimit(c *gin.Context, key string, config LimiterConfig) (bool, error) {
+	rdb := redisClient.Redis
+	now := time.Now().Unix()
+	windowStart := now - int64(config.TTL.Seconds())
+
+	pipe := rdb.Client.Pipeline()
+	
+	// 移除旧的记录
+	pipe.ZRemRangeByScore(c, key, "0", strconv.FormatInt(windowStart, 10))
+	
+	// 添加当前请求
+	pipe.ZAdd(c, key, redis.Z{
+		Score:  float64(now),
+		Member: now,
+	})
+	
+	// 获取当前窗口的请求数
+	countCmd := pipe.ZCard(c, key)
+	
+	// 设置过期时间
+	pipe.Expire(c, key, config.TTL)
+	
+	// 执行 Pipeline
+	_, err := pipe.Exec(c)
+	if err != nil {
+		return false, fmt.Errorf("redis pipeline error: %v", err)
+	}
+	
+	// 检查是否超出限制
+	count := countCmd.Val()
+	return count <= int64(config.Burst), nil
+}
+
+// LimitMiddleware 创建限流中间件
+func LimitMiddleware(keyPrefix string, limit string) gin.HandlerFunc {
+	// 解析限流配置
+	rate, burst, err := parseLimitConfig(limit)
+	if err != nil {
+		logger.ErrorString("限流器", "创建失败", err.Error())
+		// 使用默认配置
+		rate = 100
+		burst = 100
+	}
+
+	config := LimiterConfig{
+		Rate:  rate,
+		Burst: burst,
+		TTL:   time.Hour,
+	}
+
+	return func(c *gin.Context) {
+		// 获取客户端 IP
+		clientIP := c.ClientIP()
+		key := fmt.Sprintf("%s:%s", keyPrefix, clientIP)
+
+		// 检查是否超出限制
+		allowed, err := checkRateLimit(c, key, config)
+		if err != nil {
+			logger.ErrorString("限流器", "检查失败", err.Error())
+			c.Next()
+			return
+		}
+
+		if !allowed {
+			c.AbortWithStatusJSON(429, gin.H{
+				"message": "请求太频繁，请稍后再试",
+			})
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// parseLimitConfig 解析限流配置字符串
+func parseLimitConfig(limit string) (rate int, burst int, err error) {
+	// 支持 "100/h" 或 "100,200" 格式
+	if strings.Contains(limit, "/") {
+		parts := strings.Split(limit, "/")
+		if len(parts) != 2 {
+			return 0, 0, fmt.Errorf("invalid limit format: %s", limit)
+		}
+		
+		// 解析速率
+		r, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid rate: %v", err)
+		}
+		
+		// 根据时间单位调整速率
+		switch strings.ToLower(parts[1]) {
+		case "h":
+			rate = r / 3600 // 转换为每秒速率
+		case "m":
+			rate = r / 60
+		case "s":
+			rate = r
+		default:
+			return 0, 0, fmt.Errorf("invalid time unit: %s", parts[1])
+		}
+		
+		burst = rate * 2 // 默认突发限制为速率的2倍
+		return rate, burst, nil
+	}
+	
+	// 原有的 "rate,burst" 格式处理
+	return parseRateBurst(limit)
 }

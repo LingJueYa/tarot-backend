@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"golang.org/x/sync/errgroup"
 )
 
 // 加载应用程序的基础配置
@@ -39,7 +38,7 @@ func main() {
 
 	// 创建并配置 Gin 服务器
 	router := setupServer()
-	
+
 	// 创建应用实例
 	app := &App{
 		server: &http.Server{
@@ -63,25 +62,29 @@ func parseFlags() string {
 
 // setupApplication 初始化应用程序所需的各种组件
 func setupApplication(env string) error {
-	// 使用 errgroup 来并行初始化各组件
-	var g errgroup.Group
+	// 先初始化配置
+	config.InitConfig(env)
 
-	g.Go(func() error {
-		config.InitConfig(env)
+	// 然后初始化日志
+	bootstrap.SetupLogger()
+
+	// 初始化数据库
+	bootstrap.SetupDB()
+
+	// 初始化 Redis
+	bootstrap.SetupRedis()
+
+	// 初始化队列服务
+	bootstrap.SetupQueue()
+
+	// 初始化 Dify 服务
+	difyService := bootstrap.SetupDify()
+	if difyService == nil {
+		log.Println("Dify 服务初始化失败，请检查配置")
 		return nil
-	})
+	}
 
-	g.Go(func() error {
-		bootstrap.SetupLogger()
-		return nil
-	})
-
-	g.Go(func() error {
-		bootstrap.SetupDB()
-		return nil
-	})
-
-	return g.Wait()
+	return nil
 }
 
 // setupServer 配置并返回 Gin 服务器实例
