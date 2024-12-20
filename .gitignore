@@ -1,0 +1,66 @@
+# macOS 系统文件
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 图标必须以两个 \r 结尾
+Icon
+
+# 缩略图
+._*
+
+# 可能出现在卷根目录中的文件
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# 可能在远程 AFP 共享上创建的目录
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# IDE 相关
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go 语言相关
+# 二进制文件
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试二进制文件
+*.test
+
+# 覆盖率工具生成的文件
+*.out
+
+# 依赖目录
+/vendor/
+/Godeps/
+
+# 编译输出
+/bin/
+/dist/
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# 日志文件
+*.log
+
+# 临时文件
+tmp/
+temp/
